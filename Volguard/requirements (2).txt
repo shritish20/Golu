@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+requests
+plotly
+arch
+xgboost
+scipy
+fastapi
+uvicorn
+python-dateutil
