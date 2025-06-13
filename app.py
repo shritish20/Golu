@@ -146,7 +146,7 @@ async def get_all_journals():
 async def fetch_option_chain(config):
     async with httpx.AsyncClient() as client:
         try:
-            url = f"{config["base_url"]}/option/chain"
+            url = f"{config['base_url']}/option/chain"
             params = {"instrument_key": config["instrument_key"], "expiry_date": config["expiry_date"]}
             res = await client.get(url, headers=config["headers"], params=params)
             res.raise_for_status()
