@@ -137,7 +137,8 @@ async def get_all_journals():
             return response.json()
         except httpx.RequestError as e:
             logger.error(f"Error fetching journals: {e}")
-            return []    config["expiry_date"] = await get_next_expiry_internal()
+            return [] 
+            config["expiry_date"] = await get_next_expiry_internal()
     return config
 
 # --- Data Fetching and Calculation Functions ---
