@@ -517,6 +517,8 @@ def calculate_regime(atm_iv: float, ivp: float, realized_vol: float, garch_vol: 
     else:
         return regime_score, "Low Volatility :chart_with_downwards_trend:", "Low volatility — cautious selling or long vega plays.", "Low IVP, tight straddle, and low VIX suggest limited movement."
 
+
+
 async def suggest_strategy(regime_label: str, ivp: float, iv_minus_rv: float, days_to_expiry: int, expiry_date: str, straddle_price: float, spot_price: float, config: Dict[str, Any]) -> tuple[List[str], str, Optional[str]]:
     strategies = []
     rationale = []
@@ -530,7 +532,33 @@ async def suggest_strategy(regime_label: str, ivp: float, iv_minus_rv: float, da
             event_df = pd.read_csv(BytesIO(events_response.content))
         
         event_df.columns = event_df.columns.str.strip()
-        event_df['Datetime'] = pd.to_datetime(event_df['Datetime'])
+        
+        # --- START OF REQUIRED CHANGE ---
+        # Ensure 'Date' and 'Time' columns exist
+        if 'Date' in event_df.columns and 'Time' in event_df.columns:
+            # Get the current year to append to the date string (e.g., "05-Jun-2025")
+            # We use the current year as your CSV dates don't include the year.
+            current_year = datetime.now().year
+            
+            # Combine 'Date' and 'Time' columns and append the current year
+            # Use .apply() with a lambda to handle potential NaN values gracefully
+            event_df['CombinedDateTimeStr'] = event_df.apply(
+                lambda row: f"{row['Date']}-{current_year} {row['Time']}" if pd.notna(row['Date']) and pd.notna(row['Time']) else np.nan,
+                axis=1
+            )
+            
+            # Convert the combined string to datetime objects
+            # The format '%d-%b-%Y %H:%M' matches your "05-Jun-2025 17:45" format
+            # errors='coerce' will turn any unparseable dates into NaT (Not a Time), preventing errors
+            event_df['Datetime'] = pd.to_datetime(event_df['CombinedDateTimeStr'], format='%d-%b-%Y %H:%M', errors='coerce')
+            
+            # Drop the temporary column used for combining strings if it's no longer needed
+            event_df = event_df.drop(columns=['CombinedDateTimeStr'])
+        else:
+            logger.error("Missing 'Date' or 'Time' columns in upcoming_events.csv. Cannot process event dates.")
+            # Create an empty 'Datetime' column filled with NaT (Not a Time) to prevent downstream errors
+            event_df['Datetime'] = pd.NaT # pd.NaT stands for Not a Time for datetime columns
+        # --- END OF REQUIRED CHANGE ---
 
         event_window = 3 if ivp > 80 else 2 # Days before expiry to consider as "near"
         high_impact_event_near = False
@@ -538,7 +566,8 @@ async def suggest_strategy(regime_label: str, ivp: float, iv_minus_rv: float, da
         current_expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
 
         for _, row in event_df.iterrows():
-            if pd.isna(row["Datetime"]): continue # Skip rows with invalid datetime
+            # This check `pd.isna(row["Datetime"])` is crucial after the change to skip invalid rows
+            if pd.isna(row["Datetime"]): continue 
             event_dt = row["Datetime"]
             level = str(row["Classification"]).strip() # Ensure string and strip whitespace
 
