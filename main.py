@@ -954,7 +954,7 @@ async def get_strategy_details(strategy_name: str, option_chain: List[Dict[str, 
 
     return detail
 
-async def evaluate_full_risk(trades_df: pd.DataFrame, config: Dict[str, Any], regime_label: str, vix: float) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+async def evaluate_full_risk(trades_df: pd.DataFrame, config: Dict[str, Any], regime_label: str, vix: float) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Evaluates the overall risk of the trading portfolio.
     `trades_df` should ideally come from Supabase trade_logs, filtered for active/open trades.
