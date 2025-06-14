@@ -1,23 +1,24 @@
-version: '3.9'
+# Dockerfile
 
-services:
-  volguard-api:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - PORT=8000
-      - HOST=0.0.0.0
-      - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-    env_file:
-      - .env
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+# Use official Python image
+FROM python:3.10-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Set work directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y build-essential
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy app code
+COPY . .
+
+# Run the FastAPI app using Uvicorn
+CMD ["uvicorn", "volguard_main:app", "--host", "0.0.0.0", "--port", "8000"]
