@@ -292,47 +292,48 @@ def market_metrics(option_chain: List[Dict[str, Any]], expiry_date: str) -> Dict
         logger.error(f"Exception in market_metrics: {e}")
         return {"days_to_expiry": 0, "pcr": 0, "max_pain": 0}
 
-# Set up a basic logger for demonstration purposes
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+
 async def fetch_india_vix(config: Dict[str, Any]) -> float:
     """
-    Fetches India VIX from Upstox API using the correct instrument key and endpoint.
-    Removes the fallback option to a static value.
+    Fetches India VIX from Upstox API.
+    Corrects the instrument_key format for the API request parameter
+    vs. the instrument_key format in the API response.
     """
     try:
-        # Use the correct instrument key for India VIX with a colon
-        vix_instrument_key_for_api = "NSE_INDEX:India VIX"
+        # Use the pipe '|' for the instrument_key in the API *request parameter*.
+        vix_instrument_key_for_request = "NSE_INDEX|India VIX"
+        # Expect the colon ':' for the instrument_key in the API *response data*.
+        vix_instrument_key_for_response_parsing = "NSE_INDEX:India VIX"
         
         async with httpx.AsyncClient() as client:
-            # Use the /market-quote/quotes endpoint for fetching index data
-            # You can fetch multiple instruments by comma-separating them
+            # Use the /market-quote/quotes endpoint
             url = f"{config['base_url']}/market-quote/quotes"
-            params = {"instrument_key": vix_instrument_key_for_api} # Passing the specific VIX key
+            # Pass the instrument key formatted for the request parameter
+            params = {"instrument_key": vix_instrument_key_for_request}
             
+            logger.info(f"Attempting to fetch India VIX from: {url} with params: {params}")
             res = await client.get(url, headers=config['headers'], params=params)
             res.raise_for_status() # Raises an exception for 4xx/5xx responses
             
             data = res.json()
             
             # Navigate the JSON response to find the VIX last_price
-            # The structure for the /quotes endpoint places data directly under 'data' key
-            # and then by the exact instrument_key (with colon)
-            if data and data.get("data") and data["data"].get(vix_instrument_key_for_api):
-                vix_ltp = data["data"][vix_instrument_key_for_api].get("last_price")
+            # Use the instrument key formatted for parsing the response
+            if data and data.get("data") and data["data"].get(vix_instrument_key_for_response_parsing):
+                vix_ltp = data["data"][vix_instrument_key_for_response_parsing].get("last_price")
                 if vix_ltp is not None:
-                    logger.info(f"Fetched India VIX: {vix_ltp}")
+                    logger.info(f"Successfully fetched India VIX: {vix_ltp}")
                     return vix_ltp
                 else:
-                    logger.error(f"India VIX 'last_price' not found in response for {vix_instrument_key_for_api}.")
-                    raise ValueError("India VIX data not available in API response.")
+                    logger.error(f"India VIX 'last_price' not found for '{vix_instrument_key_for_response_parsing}' in response data: {data}")
+                    raise ValueError("India VIX 'last_price' not available in API response.")
             else:
-                logger.error(f"India VIX data not found in API response for key: {vix_instrument_key_for_api}. Full response: {data}")
+                logger.error(f"India VIX data not found for key '{vix_instrument_key_for_response_parsing}' in API response. Full response: {data}")
                 raise ValueError("India VIX data not found or invalid in API response.")
             
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error fetching India VIX: {e.response.status_code} - {e.response.text}")
-        raise RuntimeError(f"Failed to fetch India VIX due to HTTP error: {e.response.status_code}") from e
+        raise RuntimeError(f"Failed to fetch India VIX due to HTTP error: {e.response.status_code}. Response: {e.response.text}") from e
     except httpx.RequestError as e:
         logger.error(f"Network error fetching India VIX: {e}")
         raise RuntimeError(f"Failed to fetch India VIX due to network error: {e}") from e
@@ -342,6 +343,7 @@ async def fetch_india_vix(config: Dict[str, Any]) -> float:
     except Exception as e:
         logger.error(f"An unexpected error occurred while fetching India VIX: {e}")
         raise RuntimeError(f"An unexpected error occurred: {e}") from e
+
 
 
 
