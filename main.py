@@ -335,7 +335,7 @@ async def fetch_india_vix(config: Dict[str, Any]) -> float:
         return 15.0 # Fallback default
 
 
-async def calculate_volatility(config: Dict[str, Any], seller_avg_iv: float) -> Tuple[float, float, float]:
+async def calculate_volatility(config: Dict[str, Any], seller_avg_iv: float) -> tuple[float, float, float]:
     try:
         async with httpx.AsyncClient() as client:
             nifty_response = await client.get(config['nifty_url'])
