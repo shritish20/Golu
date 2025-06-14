@@ -38,13 +38,12 @@ SUPABASE_HEADERS = {
 }
 
 async def log_trade_to_supabase(data: dict):
-    """Logs a trade entry to Supabase."""
     data["timestamp_entry"] = datetime.utcnow().isoformat() + "Z" # ISO 8601 with Z for UTC
-    # data["timestamp_exit"] = datetime.utcnow().isoformat() + "Z" # Uncomment if exit time is dynamic
-    # data["status"] = "closed" # Uncomment if status is dynamic (e.g., from 'open' to 'closed')
+    data["timestamp_exit"] = datetime.utcnow().isoformat() + "Z"
+    data["status"] = "closed" # Assuming logs are for closed trades
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{SUPABASE_URL}/rest/v1/trade_logs", json=data, headers={**SUPABASE_HEADERS, "Authorization": f"Bearer {SUPABASE_KEY}"})
+            response = await client.post(f"{SUPABASE_URL}/rest/v1/trade_logs", json=data, headers=SUPABASE_HEADERS)
             response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
             logger.info(f"Trade logged to Supabase: {response.json()}")
             return response.status_code, response.json()
