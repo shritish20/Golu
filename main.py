@@ -292,47 +292,58 @@ def market_metrics(option_chain: List[Dict[str, Any]], expiry_date: str) -> Dict
         logger.error(f"Exception in market_metrics: {e}")
         return {"days_to_expiry": 0, "pcr": 0, "max_pain": 0}
 
+# Set up a basic logger for demonstration purposes
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 async def fetch_india_vix(config: Dict[str, Any]) -> float:
-    """Fetches India VIX from Upstox API."""
+    """
+    Fetches India VIX from Upstox API using the correct instrument key and endpoint.
+    Removes the fallback option to a static value.
+    """
     try:
-        # Assuming there's a specific instrument key for India VIX or a general market status endpoint.
-        # This is a placeholder for a specific Upstox endpoint for VIX.
-        # If Upstox doesn't provide VIX directly, you'd need another data source.
-        # For demonstration, we'll try to fetch Nifty 50 and approximate, or you might have a VIX instrument_key.
-        # A more robust solution might involve:
-        # 1. A dedicated VIX instrument_key (e.g., "NSE_INDEX|INDIA VIX").
-        # 2. An API that provides VIX data.
-        # For now, let's assume a fictitious endpoint or common index lookup for VIX.
-        # Since Upstox API for VIX specifically isn't standard, let's hardcode for now as a fallback
-        # and recommend integrating with a dedicated VIX data feed if needed.
-        # Or, if VIX is available as an instrument, we can fetch its LTP.
-        vix_instrument_key = "NSE_INDEX|INDIA VIX" # This might be incorrect for Upstox, verify.
+        # Use the correct instrument key for India VIX with a colon
+        vix_instrument_key_for_api = "NSE_INDEX:India VIX"
         
         async with httpx.AsyncClient() as client:
-            # First, try to fetch its instrument details to ensure it exists and get its LTP
-            url = f"{config['base_url']}/market-quotes/ltp"
-            params = {"instrument_key": vix_instrument_key}
+            # Use the /market-quote/quotes endpoint for fetching index data
+            # You can fetch multiple instruments by comma-separating them
+            url = f"{config['base_url']}/market-quote/quotes"
+            params = {"instrument_key": vix_instrument_key_for_api} # Passing the specific VIX key
+            
             res = await client.get(url, headers=config['headers'], params=params)
-            res.raise_for_status()
+            res.raise_for_status() # Raises an exception for 4xx/5xx responses
+            
             data = res.json()
-            if data and data.get("data") and data["data"].get(vix_instrument_key):
-                vix_ltp = data["data"][vix_instrument_key].get("ltp")
+            
+            # Navigate the JSON response to find the VIX last_price
+            # The structure for the /quotes endpoint places data directly under 'data' key
+            # and then by the exact instrument_key (with colon)
+            if data and data.get("data") and data["data"].get(vix_instrument_key_for_api):
+                vix_ltp = data["data"][vix_instrument_key_for_api].get("last_price")
                 if vix_ltp is not None:
                     logger.info(f"Fetched India VIX: {vix_ltp}")
                     return vix_ltp
-            
-            logger.warning(f"Could not fetch live India VIX from Upstox. Falling back to default or static value.")
-            return 15.0 # Fallback default
+                else:
+                    logger.error(f"India VIX 'last_price' not found in response for {vix_instrument_key_for_api}.")
+                    raise ValueError("India VIX data not available in API response.")
+            else:
+                logger.error(f"India VIX data not found in API response for key: {vix_instrument_key_for_api}. Full response: {data}")
+                raise ValueError("India VIX data not found or invalid in API response.")
             
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error fetching India VIX: {e.response.status_code} - {e.response.text}. Falling back to default.")
-        return 15.0 # Fallback default
+        logger.error(f"HTTP error fetching India VIX: {e.response.status_code} - {e.response.text}")
+        raise RuntimeError(f"Failed to fetch India VIX due to HTTP error: {e.response.status_code}") from e
     except httpx.RequestError as e:
-        logger.error(f"Network error fetching India VIX: {e}. Falling back to default.")
-        return 15.0 # Fallback default
+        logger.error(f"Network error fetching India VIX: {e}")
+        raise RuntimeError(f"Failed to fetch India VIX due to network error: {e}") from e
+    except (ValueError, KeyError, TypeError) as e:
+        logger.error(f"Error parsing India VIX data from API response: {e}")
+        raise RuntimeError(f"Failed to parse India VIX data: {e}") from e
     except Exception as e:
-        logger.error(f"Unexpected exception fetching India VIX: {e}. Falling back to default.")
-        return 15.0 # Fallback default
+        logger.error(f"An unexpected error occurred while fetching India VIX: {e}")
+        raise RuntimeError(f"An unexpected error occurred: {e}") from e
+
+
 
 
 async def calculate_volatility(config: Dict[str, Any], seller_avg_iv: float) -> tuple[float, float, float]:
