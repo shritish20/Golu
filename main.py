@@ -1335,7 +1335,7 @@ async def suggest_strategy_endpoint(access_token: str = Query(..., description="
     iv_skew_slope = calculate_iv_skew_slope(full_chain_df)
 
     regime_score, regime_label, regime_note, regime_explanation = calculate_regime(
-        seller_metrics["avg_iv"], ivp, hv_7, garch_7d, seller_metrics["straddle_price"], spot_price, market_metrics_data["pcr"], vix, iv_skew_skew_slope
+        seller_metrics["avg_iv"], ivp, hv_7, garch_7d, seller_metrics["straddle_price"], spot_price, market_metrics_data["pcr"], vix, iv_skew_slope
     )
 
     strategies, rationale, event_warning = await suggest_strategy(
