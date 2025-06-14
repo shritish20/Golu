@@ -482,7 +482,7 @@ def calculate_iv_skew_slope(full_chain_df: pd.DataFrame) -> float:
         logger.error(f"Exception in calculate_iv_skew_slope: {e}")
         return 0.0
 
-def calculate_regime(atm_iv: float, ivp: float, realized_vol: float, garch_vol: float, straddle_price: float, spot_price: float, pcr: float, vix: float, iv_skew_slope: float) -> Tuple[float, str, str, str]:
+def calculate_regime(atm_iv: float, ivp: float, realized_vol: float, garch_vol: float, straddle_price: float, spot_price: float, pcr: float, vix: float, iv_skew_slope: float) -> tuple[float, str, str, str]:
     expected_move = (straddle_price / spot_price) * 100 if spot_price else 0
     vol_spread = atm_iv - realized_vol
     
@@ -504,7 +504,7 @@ def calculate_regime(atm_iv: float, ivp: float, realized_vol: float, garch_vol: 
     else:
         return regime_score, "Low Volatility :chart_with_downwards_trend:", "Low volatility — cautious selling or long vega plays.", "Low IVP, tight straddle, and low VIX suggest limited movement."
 
-async def suggest_strategy(regime_label: str, ivp: float, iv_minus_rv: float, days_to_expiry: int, expiry_date: str, straddle_price: float, spot_price: float, config: Dict[str, Any]) -> Tuple[List[str], str, Optional[str]]:
+async def suggest_strategy(regime_label: str, ivp: float, iv_minus_rv: float, days_to_expiry: int, expiry_date: str, straddle_price: float, spot_price: float, config: Dict[str, Any]) -> tuple[List[str], str, Optional[str]]:
     strategies = []
     rationale = []
     event_warning = None
