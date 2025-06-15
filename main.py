@@ -11,7 +11,7 @@ from scipy.stats import linregress
 
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, Body
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError # Import ValidationError
 from typing import List, Optional, Dict, Any, Set
 import websockets 
 
@@ -108,7 +108,7 @@ class UpstoxOrderRequest(BaseModel):
     price: float
     tag: Optional[str] = None
     slice: Optional[bool] = False
-    instrument_token: str
+    instrument_key: str # CHANGED FROM instrument_token to instrument_key
     order_type: str # e.g., "LIMIT", "MARKET"
     transaction_type: str # "BUY" or "SELL"
     disclosed_quantity: Optional[int] = Field(0, ge=0)
@@ -215,7 +215,14 @@ async def get_config(access_token: str) -> Dict[str, Any]:
                 config['expiry_date'] = next_expiry
             else:
                 logger.warning(f"No upcoming Thursday expiry found. Defaulting to current date: {today.strftime('%Y-%m-%d')}")
-                config['expiry_date'] = today.strftime("%Y-%m-%d")
+                # Fallback to the nearest available expiry if no Thursday or current date doesn't have options
+                if expiries:
+                    config['expiry_date'] = expiries[0]["expiry"]
+                    logger.warning(f"Falling back to nearest available expiry: {config['expiry_date']}")
+                else:
+                    config['expiry_date'] = today.strftime("%Y-%m-%d")
+                    logger.error("No expiries found at all. Defaulting to current date.")
+
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error fetching expiries in get_config: {e.response.status_code} - {e.response.text}")
         config['expiry_date'] = datetime.now().strftime("%Y-%m-%d") # Fallback
@@ -671,12 +678,13 @@ def find_option_by_strike(option_chain: List[Dict[str, Any]], strike: float, opt
 
 def get_dynamic_wing_distance(ivp: float, straddle_price: float) -> int:
     """Calculates dynamic wing distance for multi-leg strategies."""
+    # Modified to be less extreme for Iron Fly, and more responsive to IVP
     if ivp >= 80:
-        multiplier = 0.35
+        multiplier = 0.30 # Slightly reduced for very high IV
     elif ivp <= 20:
-        multiplier = 0.2
+        multiplier = 0.20
     else:
-        multiplier = 0.25
+        multiplier = 0.25 # Default
     raw_distance = straddle_price * multiplier
     return int(round(raw_distance / 50.0)) * 50  # Round to nearest 50 for Nifty
 
@@ -687,7 +695,10 @@ def _iron_fly_calc(option_chain: List[Dict[str, Any]], spot_price: float, config
     atm_strike = atm_info["strike_price"]
     straddle_price = (atm_info["call_options"]["market_data"]["ltp"] + atm_info["put_options"]["market_data"]["ltp"]) if atm_info["call_options"] and atm_info["put_options"] else 0.0
 
-    wing_distance = get_dynamic_wing_distance(80, straddle_price) # High IVP for wing distance for Iron Fly
+    # Ensure ivp is passed from context if available, otherwise default for get_dynamic_wing_distance
+    # For now, keeping a sensible default or explicitly passing if available from calling func
+    # Assuming a high IVP for Iron Fly for wider wings to capture more premium
+    wing_distance = get_dynamic_wing_distance(80, straddle_price) # Using a high IVP as input for wider wings
 
     ce_short_opt = find_option_by_strike(option_chain, atm_strike, "CE")
     pe_short_opt = find_option_by_strike(option_chain, atm_strike, "PE")
@@ -712,6 +723,7 @@ def _iron_condor_calc(option_chain: List[Dict[str, Any]], spot_price: float, con
     atm_strike = atm_info["strike_price"]
     straddle_price = (atm_info["call_options"]["market_data"]["ltp"] + atm_info["put_options"]["market_data"]["ltp"]) if atm_info["call_options"] and atm_info["put_options"] else 0.0
 
+    # For Iron Condor, typically wider, so maybe a slightly lower IVP for calculation if not tied to actual IVP
     short_wing_distance = get_dynamic_wing_distance(50, straddle_price) # Moderate IVP for wider short wings
     long_wing_distance = int(round(short_wing_distance * 1.5 / 50)) * 50 # 1.5x the short wing distance
 
@@ -741,9 +753,16 @@ def _jade_lizard_calc(option_chain: List[Dict[str, Any]], spot_price: float, con
     """Calculates details for Jade Lizard strategy."""
     atm_info = min(option_chain, key=lambda x: abs(x["strike_price"] - spot_price))
 
+    # These strike offsets might need to be dynamic or configured based on market conditions
     call_short_strike = atm_info["strike_price"] + 100 # Slightly OTM Call
     pe_short_strike = atm_info["strike_price"] - 50 # Closer OTM Put
     pe_long_strike = atm_info["strike_price"] - 150 # Further OTM Put for hedge
+
+    # Ensure strikes are rounded to nearest 50 for Nifty
+    call_short_strike = int(round(call_short_strike / 50.0)) * 50
+    pe_short_strike = int(round(pe_short_strike / 50.0)) * 50
+    pe_long_strike = int(round(pe_long_strike / 50.0)) * 50
+
 
     ce_short_opt = find_option_by_strike(option_chain, call_short_strike, "CE")
     pe_short_opt = find_option_by_strike(option_chain, pe_short_strike, "PE")
@@ -815,6 +834,7 @@ def _bull_put_spread_calc(option_chain: List[Dict[str, Any]], spot_price: float,
 
 def _wide_strangle_calc(option_chain: List[Dict[str, Any]], spot_price: float, config: Dict[str, Any], lots: int) -> Optional[Dict[str, Any]]:
     """Calculates details for Wide Strangle strategy."""
+    # Fixed distances, could be dynamic based on volatility or expected move
     call_short_strike = spot_price + 200
     put_short_strike = spot_price - 200
 
@@ -837,6 +857,7 @@ def _wide_strangle_calc(option_chain: List[Dict[str, Any]], spot_price: float, c
 
 def _atm_strangle_calc(option_chain: List[Dict[str, Any]], spot_price: float, config: Dict[str, Any], lots: int) -> Optional[Dict[str, Any]]:
     """Calculates details for ATM Strangle strategy."""
+    # Closer to ATM, fixed distances
     call_short_strike = spot_price + 50
     put_short_strike = spot_price - 50
 
@@ -927,7 +948,10 @@ async def get_strategy_details(strategy_name: str, option_chain: List[Dict[str, 
         wing_width = 0
         if strategy_name == "Iron Fly":
             if len(detail["strikes"]) == 3: # Assuming [PE_Long, ATM_Short, CE_Long]
-                wing_width = abs(detail["strikes"][2] - detail["strikes"][0]) / 2 # Total spread / 2 for single side risk
+                # The wing width for an Iron Fly is the difference between the short strike and the long wing strike
+                # Since strikes are sorted, [pe_long, atm_short, ce_long]
+                # Max loss on either side is (Wing_Distance * Lot_Size) - Premium_Received
+                wing_width = abs(detail["strikes"][1] - detail["strikes"][0]) # Distance from ATM short put to long put (or call side)
             else:
                  logger.warning(f"Unexpected number of strikes for {strategy_name}: {detail['strikes']}")
         elif strategy_name == "Iron Condor":
@@ -952,10 +976,13 @@ async def get_strategy_details(strategy_name: str, option_chain: List[Dict[str, 
         if detail["premium_total"] >= 0: # Credit strategies
             detail["max_profit"] = detail["premium_total"]
             if wing_width > 0: # Defined risk credit strategies (Iron Fly, Iron Condor, Jade Lizard, Bull Put Spread)
+                # Max loss for a credit spread/condor/fly is (Width of wing * Lotsize * number of lots) - total premium received
                 detail["max_loss"] = (wing_width * config["lot_size"] * lots) - detail["premium_total"]
+                if detail["max_loss"] < 0: # Ensure max_loss is non-negative, can happen if premium is very high
+                    detail["max_loss"] = 0
             else: # Undefined risk credit strategies (Straddle, Strangle)
-                detail["max_loss"] = float("inf")
-        else: # Debit strategies (Calendar Spread)
+                detail["max_loss"] = float("inf") # Unlimited loss potential
+        else: # Debit strategies (e.g., Calendar Spread, if implemented)
             detail["max_profit"] = float("inf") # Theoretically unlimited, practically capped by other factors
             detail["max_loss"] = abs(detail["premium_total"]) # Max loss is the debit paid
 
@@ -1373,7 +1400,13 @@ async def get_strategy_details_endpoint(req: StrategyRequest, access_token: str 
              raise HTTPException(status_code=404, detail=f"No details found for {req.strategy}. Check if required options exist in the chain or if calculation logic failed.")
 
     # Convert 'orders' list of dicts back to UpstoxOrderRequest Pydantic models for consistency
-    detail['orders'] = [UpstoxOrderRequest(**order) for order in detail['orders']]
+    # Ensure all required fields for UpstoxOrderRequest are present or handled by Pydantic's defaults/Optional
+    try:
+        detail['orders'] = [UpstoxOrderRequest(**order) for order in detail['orders']]
+    except ValidationError as e:
+        logger.error(f"Pydantic validation error when converting order details: {e}")
+        # Re-raise as HTTPException or handle gracefully
+        raise HTTPException(status_code=500, detail=f"Internal server error: Failed to validate order details. {e.errors()}")
 
     logger.info(f"Details found for {req.strategy}.")
     return detail
@@ -1764,4 +1797,3 @@ async def authorize_portfolio_feed_endpoint(access_token: str = Query(..., descr
     except Exception as e:
         logger.error(f"Unexpected error authorizing portfolio WS URL: {e}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
-
