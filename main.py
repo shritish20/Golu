@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from arch import arch_model
 from scipy.stats import linregress
 
-from fastapi import FastAPI, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, Body, APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError # Import ValidationError
 from typing import List, Optional, Dict, Any, Set
@@ -236,7 +236,7 @@ async def get_config(access_token: str) -> Dict[str, Any]:
     return config
 
 # --- Data Fetching and Calculation Functions ---
-async def fetch_option_chain(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def fetch_option_chain_data(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Fetches the option chain for the configured instrument and expiry date."""
     try:
         async with httpx.AsyncClient() as client:
@@ -252,7 +252,7 @@ async def fetch_option_chain(config: Dict[str, Any]) -> List[Dict[str, Any]]:
         logger.error(f"Network error fetching option chain: {e}")
         raise HTTPException(status_code=500, detail=f"Network error fetching option chain: {str(e)}")
     except Exception as e:
-        logger.error(f"Unexpected exception in fetch_option_chain: {e}")
+        logger.error(f"Unexpected exception in fetch_option_chain_data: {e}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred while fetching option chain: {str(e)}")
 
 def extract_seller_metrics(option_chain: List[Dict[str, Any]], spot_price: float) -> Dict[str, Any]:
@@ -274,7 +274,7 @@ def extract_seller_metrics(option_chain: List[Dict[str, Any]], spot_price: float
         put_atm = atm_strike_info["put_options"]
 
         return {
-            "strike": atm_strike_info["strike_price"],
+            "atm_strike": atm_strike_info["strike_price"],
             "straddle_price": call_atm["market_data"]["ltp"] + put_atm["market_data"]["ltp"],
             "avg_iv": (call_atm["option_greeks"]["iv"] + put_atm["option_greeks"]["iv"]) / 2,
             "theta": (call_atm["option_greeks"].get("theta", 0.0) or 0.0) + (put_atm["option_greeks"].get("theta", 0.0) or 0.0),
@@ -287,7 +287,7 @@ def extract_seller_metrics(option_chain: List[Dict[str, Any]], spot_price: float
         logger.error(f"Exception in extract_seller_metrics for spot {spot_price}: {e}")
         return {}
 
-def market_metrics(option_chain: List[Dict[str, Any]], expiry_date: str) -> Dict[str, Any]:
+def calculate_market_metrics(option_chain: List[Dict[str, Any]], expiry_date: str) -> Dict[str, Any]:
     """Calculates broader market metrics like Days to Expiry, PCR, and Max Pain."""
     try:
         expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d")
@@ -326,49 +326,57 @@ def market_metrics(option_chain: List[Dict[str, Any]], expiry_date: str) -> Dict
         return {"days_to_expiry": 0, "pcr": 0, "max_pain": 0}
 
 
-async def fetch_india_vix(config: Dict[str, Any]) -> float:
+async def fetch_india_vix_and_nifty_spot(config: Dict[str, Any]) -> tuple[float, float]:
     """
-    Fetches India VIX from Upstox API.
-    Corrects the instrument_key format for the API request parameter
-    vs. the instrument_key format in the API response.
+    Fetches India VIX and Nifty 50 spot from Upstox API.
     """
     try:
         vix_instrument_key_for_request = "NSE_INDEX|India VIX"
+        nifty_instrument_key_for_request = "NSE_INDEX|Nifty 50"
         vix_instrument_key_for_response_parsing = "NSE_INDEX:India VIX" # Upstox API returns this format
+        nifty_instrument_key_for_response_parsing = "NSE_INDEX:Nifty 50" # Upstox API returns this format
+
 
         async with httpx.AsyncClient() as client:
             url = f"{config['base_url']}/market-quote/quotes"
-            params = {"instrument_key": vix_instrument_key_for_request}
+            params = {"instrument_key": f"{vix_instrument_key_for_request},{nifty_instrument_key_for_request}"}
 
-            logger.info(f"Attempting to fetch India VIX from: {url} with params: {params}")
+            logger.info(f"Attempting to fetch India VIX and Nifty Spot from: {url} with params: {params}")
             res = await client.get(url, headers=config['headers'], params=params)
             res.raise_for_status()
 
             data = res.json()
+            
+            vix_ltp = None
+            nifty_ltp = None
 
-            if data and data.get("data") and data["data"].get(vix_instrument_key_for_response_parsing):
-                vix_ltp = data["data"][vix_instrument_key_for_response_parsing].get("last_price")
-                if vix_ltp is not None:
-                    logger.info(f"Successfully fetched India VIX: {vix_ltp}")
-                    return vix_ltp
-                else:
-                    logger.error(f"India VIX 'last_price' not found for '{vix_instrument_key_for_response_parsing}' in response data: {data}")
-                    raise ValueError("India VIX 'last_price' not available in API response.")
+            if data and data.get("data"):
+                if data["data"].get(vix_instrument_key_for_response_parsing):
+                    vix_ltp = data["data"][vix_instrument_key_for_response_parsing].get("last_price")
+                if data["data"].get(nifty_instrument_key_for_response_parsing):
+                    nifty_ltp = data["data"][nifty_instrument_key_for_response_parsing].get("last_price")
+
+            if vix_ltp is not None and nifty_ltp is not None:
+                logger.info(f"Successfully fetched India VIX: {vix_ltp} and Nifty Spot: {nifty_ltp}")
+                return vix_ltp, nifty_ltp
             else:
-                logger.error(f"India VIX data not found for key '{vix_instrument_key_for_response_parsing}' in API response. Full response: {data}")
-                raise ValueError("India VIX data not found or invalid in API response.")
+                missing_data = []
+                if vix_ltp is None: missing_data.append("India VIX")
+                if nifty_ltp is None: missing_data.append("Nifty Spot")
+                logger.error(f"Missing data for {', '.join(missing_data)} in API response. Full response: {data}")
+                raise ValueError(f"Required data for {', '.join(missing_data)} not available in API response.")
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error fetching India VIX: {e.response.status_code} - {e.response.text}")
-        raise RuntimeError(f"Failed to fetch India VIX due to HTTP error: {e.response.status_code}. Response: {e.response.text}") from e
+        logger.error(f"HTTP error fetching India VIX and Nifty Spot: {e.response.status_code} - {e.response.text}")
+        raise RuntimeError(f"Failed to fetch India VIX and Nifty Spot due to HTTP error: {e.response.status_code}. Response: {e.response.text}") from e
     except httpx.RequestError as e:
-        logger.error(f"Network error fetching India VIX: {e}")
-        raise RuntimeError(f"Failed to fetch India VIX due to network error: {e}") from e
+        logger.error(f"Network error fetching India VIX and Nifty Spot: {e}")
+        raise RuntimeError(f"Failed to fetch India VIX and Nifty Spot due to network error: {e}") from e
     except (ValueError, KeyError, TypeError) as e:
-        logger.error(f"Error parsing India VIX data from API response: {e}")
-        raise RuntimeError(f"Failed to parse India VIX data: {e}") from e
+        logger.error(f"Error parsing India VIX and Nifty Spot data from API response: {e}")
+        raise RuntimeError(f"Failed to parse India VIX and Nifty Spot data: {e}") from e
     except Exception as e:
-        logger.error(f"An unexpected error occurred while fetching India VIX: {e}")
+        logger.error(f"An unexpected error occurred while fetching India VIX and Nifty Spot: {e}")
         raise RuntimeError(f"An unexpected error occurred: {e}") from e
 
 
@@ -697,8 +705,8 @@ def _iron_fly_calc(option_chain: List[Dict[str, Any]], spot_price: float, config
 
     # Ensure ivp is passed from context if available, otherwise default for get_dynamic_wing_distance
     # For now, keeping a sensible default or explicitly passing if available from calling func
-    # Assuming a high IVP for Iron Fly for wider wings to capture more premium
-    wing_distance = get_dynamic_wing_distance(80, straddle_price) # Using a high IVP as input for wider wings
+    # Using a high IVP as input for wider wings for Iron Fly (as it's often used in high IV regimes)
+    wing_distance = get_dynamic_wing_distance(80, straddle_price) 
 
     ce_short_opt = find_option_by_strike(option_chain, atm_strike, "CE")
     pe_short_opt = find_option_by_strike(option_chain, atm_strike, "PE")
@@ -801,7 +809,7 @@ def _calendar_spread_calc(option_chain: List[Dict[str, Any]], spot_price: float,
     """
     Calculates details for Calendar Spread strategy.
     NOTE: This implementation requires fetching option chains for multiple expiry dates,
-    which is not directly supported by the current single-expiry `fetch_option_chain` flow.
+    which is not directly supported by the current single-expiry `fetch_option_chain_data` flow.
     It will always return None with a warning.
     """
     logger.error("Calendar Spread calculation requires fetching option chains for multiple expiry dates (e.g., near and far), which is not fully implemented in this single-expiry flow. Returning None.")
@@ -1199,7 +1207,7 @@ async def predict_volatility_endpoint(access_token: str = Query(..., description
     logger.info("Predicting volatility...")
     config = await get_config(access_token)
 
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1209,13 +1217,13 @@ async def predict_volatility_endpoint(access_token: str = Query(..., description
     if not seller_metrics or seller_metrics.get("avg_iv") is None:
         raise HTTPException(status_code=500, detail="Could not extract seller metrics (e.g., average IV) from option chain for volatility calculation.")
 
-    market_metrics_data = market_metrics(option_chain, config['expiry_date'])
+    market_metrics_data = calculate_market_metrics(option_chain, config['expiry_date'])
 
     hv_7, garch_7d, iv_rv_spread = await calculate_volatility(config, seller_metrics["avg_iv"])
 
     xgb_model = await load_xgboost_model()
     # Fetch VIX and calculate IVP dynamically for XGBoost prediction
-    vix = await fetch_india_vix(config)
+    vix, _ = await fetch_india_vix_and_nifty_spot(config) # Only need VIX here
     ivp = await calculate_ivp(config, seller_metrics["avg_iv"])
 
     xgb_vol = predict_xgboost_volatility(
@@ -1283,7 +1291,7 @@ async def fetch_option_chain_api(access_token: str = Query(..., description="Ups
     """
     logger.info("Fetching option chain...")
     config = await get_config(access_token)
-    data = await fetch_option_chain(config)
+    data = await fetch_option_chain_data(config)
     return {"data": data}
 
 @app.post("/execute/order")
@@ -1329,7 +1337,7 @@ async def suggest_strategy_endpoint(access_token: str = Query(..., description="
     """
     logger.info("Suggesting strategies...")
     config = await get_config(access_token)
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1339,11 +1347,11 @@ async def suggest_strategy_endpoint(access_token: str = Query(..., description="
     if not seller_metrics or seller_metrics.get("avg_iv") is None:
         raise HTTPException(status_code=500, detail="Could not extract seller metrics from option chain for strategy suggestion.")
 
-    market_metrics_data = market_metrics(option_chain, config['expiry_date'])
+    market_metrics_data = calculate_market_metrics(option_chain, config['expiry_date'])
 
     hv_7, garch_7d, iv_rv_spread = await calculate_volatility(config, seller_metrics["avg_iv"])
     ivp = await calculate_ivp(config, seller_metrics["avg_iv"])
-    vix = await fetch_india_vix(config)
+    vix, _ = await fetch_india_vix_and_nifty_spot(config)
 
     # To calculate IV skew slope, we need the full chain DataFrame with IV Skew
     full_chain_df_data = []
@@ -1386,7 +1394,7 @@ async def get_strategy_details_endpoint(req: StrategyRequest, access_token: str 
     """
     logger.info(f"Getting details for strategy: {req.strategy}")
     config = await get_config(access_token)
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1420,7 +1428,7 @@ async def evaluate_risk_endpoint(req: RiskEvaluationRequest, access_token: str =
     logger.info("Evaluating portfolio risk...")
     config = await get_config(access_token)
 
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1430,10 +1438,10 @@ async def evaluate_risk_endpoint(req: RiskEvaluationRequest, access_token: str =
     if not seller_metrics or seller_metrics.get("avg_iv") is None:
         raise HTTPException(status_code=500, detail="Could not extract seller metrics for risk evaluation.")
 
-    vix = await fetch_india_vix(config)
+    vix, _ = await fetch_india_vix_and_nifty_spot(config)
     hv_7, garch_7d, iv_rv_spread = await calculate_volatility(config, seller_metrics["avg_iv"])
     ivp = await calculate_ivp(config, seller_metrics["avg_iv"])
-    market_metrics_data = market_metrics(option_chain, config['expiry_date'])
+    market_metrics_data = calculate_market_metrics(option_chain, config['expiry_date'])
 
     full_chain_df_data = []
     for opt in option_chain:
@@ -1469,7 +1477,7 @@ async def full_chain_table_endpoint(access_token: str = Query(..., description="
     """
     logger.info("Generating full option chain table...")
     config = await get_config(access_token)
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1514,7 +1522,7 @@ async def calculate_regime_endpoint(access_token: str = Query(..., description="
     """
     logger.info("Calculating market regime...")
     config = await get_config(access_token)
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1526,8 +1534,8 @@ async def calculate_regime_endpoint(access_token: str = Query(..., description="
 
     hv_7, garch_7d, _ = await calculate_volatility(config, seller_metrics["avg_iv"])
     ivp = await calculate_ivp(config, seller_metrics["avg_iv"])
-    vix = await fetch_india_vix(config)
-    market_metrics_data = market_metrics(option_chain, config['expiry_date'])
+    vix, _ = await fetch_india_vix_and_nifty_spot(config)
+    market_metrics_data = calculate_market_metrics(option_chain, config['expiry_date'])
 
     # To calculate IV skew slope, we need the full chain DataFrame with IV Skew
     full_chain_df_data = []
@@ -1562,7 +1570,7 @@ async def calculate_iv_skew_slope_endpoint(access_token: str = Query(..., descri
     """
     logger.info("Calculating IV skew slope...")
     config = await get_config(access_token)
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1591,7 +1599,7 @@ async def chain_metrics_endpoint(access_token: str = Query(..., description="Ups
     """
     logger.info("Calculating option chain metrics...")
     config = await get_config(access_token)
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1601,7 +1609,7 @@ async def chain_metrics_endpoint(access_token: str = Query(..., description="Ups
     if not seller_metrics:
         raise HTTPException(status_code=500, detail="Could not extract seller metrics from option chain.")
 
-    market_metrics_data = market_metrics(option_chain, config['expiry_date'])
+    market_metrics_data = calculate_market_metrics(option_chain, config['expiry_date'])
 
     logger.info("Option chain metrics calculated.")
     return {
@@ -1617,7 +1625,7 @@ async def calc_volatility_endpoint(access_token: str = Query(..., description="U
     """
     logger.info("Calculating volatility metrics...")
     config = await get_config(access_token)
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1657,7 +1665,7 @@ async def predict_xgboost_vol_endpoint(access_token: str = Query(..., descriptio
     """
     logger.info("Predicting XGBoost volatility...")
     config = await get_config(access_token)
-    option_chain = await fetch_option_chain(config)
+    option_chain = await fetch_option_chain_data(config)
     if not option_chain:
         raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
 
@@ -1671,9 +1679,9 @@ async def predict_xgboost_vol_endpoint(access_token: str = Query(..., descriptio
     model = await load_xgboost_model()
 
     # Dynamically fetch VIX and calculate IVP
-    vix = await fetch_india_vix(config)
+    vix, _ = await fetch_india_vix_and_nifty_spot(config)
     ivp = await calculate_ivp(config, seller_metrics["avg_iv"])
-    market_metrics_data = market_metrics(option_chain, config['expiry_date'])
+    market_metrics_data = calculate_market_metrics(option_chain, config['expiry_date'])
 
     xgb_vol = predict_xgboost_volatility(
         model, seller_metrics["avg_iv"], hv_7, ivp, market_metrics_data["pcr"], vix, market_metrics_data["days_to_expiry"], garch_7d
@@ -1797,3 +1805,75 @@ async def authorize_portfolio_feed_endpoint(access_token: str = Query(..., descr
     except Exception as e:
         logger.error(f"Unexpected error authorizing portfolio WS URL: {e}")
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+
+
+# --- NEWLY MERGED ENDPOINT AND REFACTORED HELPERS ---
+
+# Renamed to avoid clash with the function in the main file
+# The original fetch_option_chain and fetch_india_vix_and_nifty from the second script are now integrated.
+# `fetch_option_chain_data` is the existing function for option chain.
+# `fetch_india_vix_and_nifty_spot` is the refactored combined function for VIX and Nifty spot.
+# `extract_seller_metrics` and `calculate_market_metrics` are already in the main file.
+# `calculate_volatility` is already in the main file.
+
+@app.get("/option-seller-dashboard")
+async def option_seller_dashboard(access_token: str = Query(..., description="Upstox Access Token")):
+    """
+    Provides a comprehensive dashboard of option seller metrics including spot price,
+    India VIX, ATM metrics, market metrics, and volatility data.
+    """
+    logger.info("Generating Option Seller Dashboard...")
+    
+    config = await get_config(access_token)
+
+    try:
+        # Step 1: Fetch Option Chain
+        option_chain = await fetch_option_chain_data(config)
+        if not option_chain:
+            raise HTTPException(status_code=400, detail="Failed to fetch option chain or it's empty.")
+        
+        spot_price = option_chain[0]["underlying_spot_price"]
+
+        # Step 2: Fetch India VIX & Nifty Spot
+        india_vix, nifty_spot = await fetch_india_vix_and_nifty_spot(config)
+
+        # Step 3: Seller Metrics
+        seller_metrics = extract_seller_metrics(option_chain, spot_price)
+        if not seller_metrics:
+            raise HTTPException(status_code=500, detail="Could not extract seller metrics from option chain.")
+
+        # Step 4: Market Metrics (using config['expiry_date'] for dynamic date)
+        market_metrics_data = calculate_market_metrics(option_chain, config['expiry_date'])
+        if not market_metrics_data:
+            raise HTTPException(status_code=500, detail="Could not calculate market metrics from option chain.")
+
+
+        # Step 5: Volatility Metrics (using avg_iv from seller_metrics)
+        hv_7_day, garch_7_day, iv_rv_spread = await calculate_volatility(config, seller_metrics["avg_iv"])
+        
+        logger.info("Option Seller Dashboard data compiled successfully.")
+        return {
+            "spot_price": round(spot_price, 2),
+            "india_vix": round(india_vix, 2),
+            "nifty_spot": round(nifty_spot, 2),
+            "atm_strike": seller_metrics["atm_strike"],
+            "straddle_price": round(seller_metrics["straddle_price"], 2),
+            "avg_iv": round(seller_metrics["avg_iv"], 2),
+            "theta": round(seller_metrics["theta"], 2),
+            "vega": round(seller_metrics["vega"], 2),
+            "delta": round(seller_metrics["delta"], 4),
+            "gamma": round(seller_metrics["gamma"], 6),
+            "pop": round(seller_metrics["pop"], 2),
+            "pcr": market_metrics_data["pcr"],
+            "max_pain": market_metrics_data["max_pain"],
+            "days_to_expiry": market_metrics_data["days_to_expiry"],
+            "hv_7_day": round(hv_7_day, 2),
+            "garch_7_day": round(garch_7_day, 2),
+            "iv_rv_spread": round(iv_rv_spread, 2)
+        }
+    except HTTPException:
+        raise # Re-raise HTTPExceptions as they are already formatted
+    except Exception as e:
+        logger.error(f"An error occurred in option_seller_dashboard: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred while generating the dashboard: {str(e)}")
+
