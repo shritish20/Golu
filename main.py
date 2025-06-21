@@ -1321,19 +1321,21 @@ async def live_dashboard(access_token: str = Query(...)):
         greeks_resp.raise_for_status()
         greeks = greeks_resp.json()["data"]
 
-        # --- P&L Fetch without 'financial_year' ---
+        # --- P&L Fetch WITH financial_year (MANDATORY in your account) ---
         try:
-            # Use a known valid date window within FY 2024–2025
+            # Fixed window within Upstox-accepted FY
             start_date = datetime.strptime("01-04-2024", "%d-%m-%Y")
             end_date = datetime.strptime("31-03-2025", "%d-%m-%Y")
 
             from_date_str = start_date.strftime("%d-%m-%Y")
             to_date_str = end_date.strftime("%d-%m-%Y")
+            financial_year_str = "2024-2025"
 
             pnl_params = {
                 "from_date": from_date_str,
                 "to_date": to_date_str,
-                "segment": "FO",  # Use 'ALL' if you want everything
+                "segment": "FO",  # Or 'ALL' if you want everything
+                "financial_year": financial_year_str,
                 "page_number": 1,
                 "page_size": 1000
             }
@@ -1371,6 +1373,7 @@ async def live_dashboard(access_token: str = Query(...)):
         "pnl_data": pnl_data,
         "pnl_summary": pnl_summary
     }
+
         
 
 @app.get("/order/book")
