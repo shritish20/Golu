@@ -14,17 +14,23 @@ from pydantic import BaseModel, Field, ValidationError  # Import ValidationError
 from typing import List, Optional, Dict, Any, Set
 import websockets
 
-from datetime import datetime
-
 def get_financial_year(date: datetime) -> str:
     """
-    Returns Indian financial year in 'YYYY-YYYY' format.
-    Example: For date '2025-06-21' → returns '2025-2026'
+    Returns capped Indian financial year in 'YYYY-YYYY' format.
+    Caps to '2025-2026' if system date leads to '2025-2026'.
     """
     if date.month >= 4:
-        return f"{date.year}-{date.year + 1}"
+        fy_start = date.year
     else:
-        return f"{date.year - 1}-{date.year}"
+        fy_start = date.year - 1
+
+    fy_end = fy_start + 1
+
+    # CAP to current allowed maximum year (Upstox limit)
+    if fy_start >= 2025:
+        return "2025-2026"
+
+    return f"{fy_start}-{fy_end}"
 
 
 
