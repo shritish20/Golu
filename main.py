@@ -1299,33 +1299,42 @@ async def place_gtt_multileg(order: MultiLegGTTRequest, access_token: str = Quer
 
 @app.get("/live/dashboard")
 async def live_dashboard(access_token: str = Query(...)):
-    """Fetches live portfolio positions, option greeks (for Nifty 50), and P&L data with summary stats."""
+    """Fetches live portfolio positions, Greeks for Nifty 50, and trade-wise P&L summary."""
+
     config = await get_config(access_token)
 
     async with httpx.AsyncClient() as client:
-        # Fetch Positions
-        positions_resp = await client.get(f"{config['base_url']}/portfolio/short-term-positions", headers=config['headers'])
+        # Fetch Short-Term Positions
+        positions_resp = await client.get(
+            f"{config['base_url']}/portfolio/short-term-positions",
+            headers=config['headers']
+        )
         positions_resp.raise_for_status()
         positions = positions_resp.json()["data"]
 
-        # Fetch Greeks
-        greeks_resp = await client.get(f"{config['v3_url']}/market-quote/option-greek", headers=config['headers'], params={"instrument_key": "NSE_INDEX|Nifty 50"})
+        # Fetch Option Greeks
+        greeks_resp = await client.get(
+            f"{config['v3_url']}/market-quote/option-greek",
+            headers=config['headers'],
+            params={"instrument_key": "NSE_INDEX|Nifty 50"}
+        )
         greeks_resp.raise_for_status()
         greeks = greeks_resp.json()["data"]
 
-        # Fetch P&L with financial year and date filters
+        # --- Safe P&L Fetch for FY 2024–2025 (Upstox Compatible) ---
         try:
-            end_date = datetime.now() - timedelta(days=1)
-            start_date = end_date - timedelta(days=30)
+            # Hardcoded FY window
+            start_date = datetime.strptime("01-04-2024", "%d-%m-%Y")
+            end_date = datetime.strptime("31-03-2025", "%d-%m-%Y")
 
             from_date_str = start_date.strftime("%d-%m-%Y")
             to_date_str = end_date.strftime("%d-%m-%Y")
-            financial_year_str = get_financial_year(end_date)
+            financial_year_str = "2024-2025"
 
             pnl_params = {
                 "from_date": from_date_str,
                 "to_date": to_date_str,
-                "segment": "FO",
+                "segment": "FO",  # Use 'ALL' if needed
                 "financial_year": financial_year_str,
                 "page_number": 1,
                 "page_size": 1000
@@ -1343,7 +1352,7 @@ async def live_dashboard(access_token: str = Query(...)):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
-    # --- Aggregated P&L Metrics ---
+    # --- P&L Summary Metrics ---
     total_pnl = sum(item.get("realized_pnl", 0) + item.get("unrealized_pnl", 0) for item in pnl_data)
     max_profit = max((item.get("realized_pnl", 0) + item.get("unrealized_pnl", 0)) for item in pnl_data) if pnl_data else 0
     max_loss = min((item.get("realized_pnl", 0) + item.get("unrealized_pnl", 0)) for item in pnl_data) if pnl_data else 0
@@ -1364,6 +1373,7 @@ async def live_dashboard(access_token: str = Query(...)):
         "pnl_data": pnl_data,
         "pnl_summary": pnl_summary
     }
+        
 
 @app.get("/order/book")
 async def order_book(access_token: str = Query(...)):
