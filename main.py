@@ -1297,14 +1297,15 @@ async def place_gtt_multileg(order: MultiLegGTTRequest, access_token: str = Quer
                 responses.append(resp.json())
         return responses
 
+
 @app.get("/live/dashboard")
 async def live_dashboard(access_token: str = Query(...)):
-    """Fetches live portfolio positions, Greeks for Nifty 50, and trade-wise P&L summary."""
+    """Fetches portfolio, greeks, and trade-wise P&L summary (Upstox compliant)."""
 
     config = await get_config(access_token)
 
     async with httpx.AsyncClient() as client:
-        # Fetch Short-Term Positions
+        # Fetch Positions
         positions_resp = await client.get(
             f"{config['base_url']}/portfolio/short-term-positions",
             headers=config['headers']
@@ -1312,7 +1313,7 @@ async def live_dashboard(access_token: str = Query(...)):
         positions_resp.raise_for_status()
         positions = positions_resp.json()["data"]
 
-        # Fetch Option Greeks
+        # Fetch Greeks
         greeks_resp = await client.get(
             f"{config['v3_url']}/market-quote/option-greek",
             headers=config['headers'],
@@ -1321,20 +1322,21 @@ async def live_dashboard(access_token: str = Query(...)):
         greeks_resp.raise_for_status()
         greeks = greeks_resp.json()["data"]
 
-        # --- P&L Fetch WITH financial_year (MANDATORY in your account) ---
+        # --- Correct P&L block with 'financial_year' as 'YYYY' format ---
         try:
-            # Fixed window within Upstox-accepted FY
-            start_date = datetime.strptime("01-04-2024", "%d-%m-%Y")
-            end_date = datetime.strptime("31-03-2025", "%d-%m-%Y")
+            start_date = datetime.strptime("01-04-2023", "%d-%m-%Y")
+            end_date = datetime.strptime("31-03-2024", "%d-%m-%Y")
 
             from_date_str = start_date.strftime("%d-%m-%Y")
             to_date_str = end_date.strftime("%d-%m-%Y")
-            financial_year_str = "2024-2025"
+
+            # Extract last 2 digits from years for Upstox format: '2324'
+            financial_year_str = f"{start_date.year % 100:02d}{end_date.year % 100:02d}"  # 2324
 
             pnl_params = {
                 "from_date": from_date_str,
                 "to_date": to_date_str,
-                "segment": "FO",  # Or 'ALL' if you want everything
+                "segment": "FO",
                 "financial_year": financial_year_str,
                 "page_number": 1,
                 "page_size": 1000
@@ -1352,7 +1354,7 @@ async def live_dashboard(access_token: str = Query(...)):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
-    # --- P&L Summary Metrics ---
+    # --- P&L Summary ---
     total_pnl = sum(item.get("realized_pnl", 0) + item.get("unrealized_pnl", 0) for item in pnl_data)
     max_profit = max((item.get("realized_pnl", 0) + item.get("unrealized_pnl", 0)) for item in pnl_data) if pnl_data else 0
     max_loss = min((item.get("realized_pnl", 0) + item.get("unrealized_pnl", 0)) for item in pnl_data) if pnl_data else 0
