@@ -19,7 +19,7 @@ from datetime import datetime
 def get_financial_year(date: datetime) -> str:
     """
     Returns Indian financial year in 'YYYY-YYYY' format.
-    Example: For date '2024-06-21' → returns '2024-2025'
+    Example: For date '2025-06-21' → returns '2025-2026'
     """
     if date.month >= 4:
         return f"{date.year}-{date.year + 1}"
