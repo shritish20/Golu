@@ -218,7 +218,7 @@ async def get_config(access_token: str) -> Dict[str, Any]:
         },
         "daily_risk_limit_pct": 0.02,
         "weekly_risk_limit_pct": 0.03,
-        "lot_size": 50  # Nifty lot size as of recent changes (was 75) - adjust if needed
+        "lot_size": 75  # Nifty lot size as of recent changes (was 75) - adjust if needed
     }
 
     try:
